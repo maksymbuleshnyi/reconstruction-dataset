@@ -1,0 +1,662 @@
+<title>capture</title>
+<style>body{margin:0;background:#111;color:#9f9}#log{font:12px monospace;padding:8px}</style>
+<div id="log">boot</div>
+<script>/*__THREE__*/</script>
+<script type="application/json" id="scene-data">/*__SCENE__*/</script>
+<script>
+(async () => {
+  const S = JSON.parse(document.getElementById('scene-data').textContent);
+  const log = m => { document.getElementById('log').textContent = m; };
+  const RES = S.res || 512;
+  const ctr = new THREE.Vector3(...S.center);
+  const R = S.radius;
+
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true, alpha: true, preserveDrawingBuffer: true });
+  renderer.setSize(RES, RES);
+  renderer.setPixelRatio(1);
+  // No shadows anywhere. Directional SHADING is what makes geometry legible
+  // and the shading conditioning channel carries it exactly; cast shadows on
+  // the table add nothing the renderer must learn. They also cannot be
+  // represented in that channel without ray tests, so keeping them would mean
+  // the conditioning says "lit" exactly where the target says "dark".
+  renderer.shadowMap.enabled = false;
+  document.body.appendChild(renderer.domElement);
+  const cam = new THREE.PerspectiveCamera(40, 1, R / 100, R * 30);
+  cam.up.set(0, 0, 1);
+
+  // ---------- geometry -----------------------------------------------------
+  const geom = p => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(p.v, 3));
+    const sc = 1 / (R * 0.35);
+    const uv = new Float32Array((p.v.length / 3) * 2);
+    for (let i = 0, j = 0; i < p.v.length; i += 3, j += 2) {
+      uv[j] = (p.v[i] + p.v[i + 2]) * sc;
+      uv[j + 1] = (p.v[i + 1] - p.v[i + 2]) * sc;
+    }
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    g.setIndex(p.f);
+    g.computeVertexNormals();
+    return g;
+  };
+
+  // procedural surface textures, as in the manuals
+  const mk = draw => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 256;
+    draw(c.getContext('2d'));
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    return t;
+  };
+  const grain = (g, base, amp) => {
+    const d = g.createImageData(256, 256);
+    for (let i = 0; i < d.data.length; i += 4) {
+      const v = base + (Math.random() - 0.5) * amp;
+      d.data[i] = d.data[i + 1] = d.data[i + 2] = v;
+      d.data[i + 3] = 255;
+    }
+    g.putImageData(d, 0, 0);
+  };
+  const texes = {
+    rough: mk(g => grain(g, 150, 90)),
+    brush: mk(g => {
+      g.fillStyle = '#8c8c8c'; g.fillRect(0, 0, 256, 256);
+      for (let i = 0; i < 1400; i++) {
+        const y = Math.random() * 256, b = 90 + Math.random() * 130 | 0;
+        g.strokeStyle = `rgba(${b},${b},${b},0.28)`;
+        g.beginPath();
+        g.moveTo(Math.random() * 256 - 40, y);
+        g.lineTo(Math.random() * 256 + 150, y + Math.random() * 1.6 - 0.8);
+        g.stroke();
+      }
+    }),
+    mottle: mk(g => {
+      g.fillStyle = '#ffffff'; g.fillRect(0, 0, 256, 256);
+      for (let i = 0; i < 260; i++) {
+        const v = 236 + Math.random() * 19 | 0;
+        g.fillStyle = `rgba(${v},${v},${v},0.5)`;
+        g.beginPath();
+        g.arc(Math.random() * 256, Math.random() * 256,
+              4 + Math.random() * 22, 0, 7);
+        g.fill();
+      }
+    }),
+  };
+
+  // ---------- realistic scene (target pass) --------------------------------
+  // A FIXED key light, identical in every frame of every object. The point
+  // of v2 was to remove things the model cannot know, not to remove shading:
+  // orientation-dependent shading is how geometry becomes visible at all,
+  // and 0.85 flat ambient washed out the roughness and clearcoat maps these
+  // materials already carry. Fixed means learnable; it was the per-session
+  // VARIATION that was unknowable, and that stays gone.
+  // One light direction, used by the target render AND by the shading
+  // conditioning pass. If these disagree the shading channel is a lie.
+  const LIGHT = new THREE.Vector3(1.5, 1.9, 2.4).normalize();
+  const scT = new THREE.Scene();
+  const key = new THREE.DirectionalLight(0xffffff, 0.82);
+  scT.add(key, key.target);
+  scT.add(new THREE.AmbientLight(0xffffff, 0.26));
+  const fill1 = new THREE.DirectionalLight(0xffffff, 0.20);
+  fill1.position.set(1, 1, 1);
+  const fill2 = new THREE.DirectionalLight(0xffffff, 0.11);
+  fill2.position.set(-1, -1, 0.6);
+  scT.add(fill1, fill2);
+
+  const env = new THREE.Scene();
+  const plate = (sz, x, y, z, b) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(sz, sz),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color().setScalar(b) }));
+    m.position.set(x, y, z); m.lookAt(0, 0, 0); env.add(m);
+  };
+  env.add(new THREE.Mesh(new THREE.SphereGeometry(40, 16, 8),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color().setScalar(0.34),
+                                  side: THREE.BackSide })));
+  // A uniform sphere gives every surface the same reflection, so metal reads
+  // as grey paint. These plates put bright and dark regions in the
+  // environment, which is what makes a metal part look metal.
+  plate(26, 14, 10, 16, 1.30);      // main softbox
+  plate(20, -16, 6, 10, 0.55);      // side bounce
+  plate(30, 0, -18, 8, 0.26);      // floor bounce, dim
+  plate(18, -4, 16, -14, 0.70);     // rim, behind
+  const pm = new THREE.PMREMGenerator(renderer);
+  scT.environment = pm.fromScene(env).texture;
+  pm.dispose();
+
+  const cadMeshes = [], stdMats = [];
+  S.parts.forEach((p, i) => {
+    const col = new THREE.Color(p.c[0] / 255, p.c[1] / 255, p.c[2] / 255)
+      .convertSRGBToLinear();
+    // metalness / roughness / clearcoat parsed from the Fusion material
+    // name, so polished brass and satin steel stop rendering identically.
+    // Falls back to the old metal/not split for captures without them.
+    const pbr = p.pbr || (p.m ? [0.88, 0.42, 0.00] : [0.04, 0.60, 0.45]);
+    const metallic = pbr[0] > 0.5;
+    const mp = {
+      color: col,
+      metalness: pbr[0],
+      roughness: pbr[1],
+      roughnessMap: metallic ? texes.brush : texes.rough,
+      bumpMap: metallic ? texes.brush : texes.rough,
+      bumpScale: metallic ? 0.02 : 0.008,
+      side: THREE.DoubleSide };
+    if (pbr[2] > 0.02) { mp.clearcoat = pbr[2];
+                         mp.clearcoatRoughness = Math.max(pbr[1] * 0.6, 0.05); }
+    if (!metallic) mp.map = texes.mottle;
+    const mat = pbr[2] > 0.02 ? new THREE.MeshPhysicalMaterial(mp)
+                              : new THREE.MeshStandardMaterial(mp);
+    stdMats.push(mat);
+    const mesh = new THREE.Mesh(geom(p), mat);
+    mesh.castShadow = mesh.receiveShadow = false;
+    scT.add(mesh);
+    cadMeshes.push(mesh);
+  });
+  const bb0 = new THREE.Box3().setFromObject(scT);
+
+  // ---------- key light placement ----------------------------------------
+  // Placed along LIGHT so its direction matches the shading pass exactly.
+  {
+    const sp = new THREE.Vector3(), sz = new THREE.Vector3();
+    bb0.getCenter(sp); bb0.getSize(sz);
+    const span = Math.max(sz.x, sz.y, sz.z) || 1;
+    key.position.copy(sp).addScaledVector(LIGHT, span * 3.2);
+    key.target.position.copy(sp);
+    key.target.updateMatrixWorld();
+  }
+
+  // ---------- conditioning scene (depth / normal / albedo / mask) ----------
+  const scC = new THREE.Scene();
+  const depthMat = new THREE.ShaderMaterial({
+    uniforms: { near: { value: 1 }, far: { value: 10 } },
+    vertexShader: `varying float vz;
+      void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0);
+        vz = -mv.z; gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `varying float vz; uniform float near; uniform float far;
+      void main(){ float d = clamp(1.0-(vz-near)/(far-near),0.0,1.0);
+        gl_FragColor = vec4(d,d,d,1.0); }`,
+    side: THREE.DoubleSide });
+  const normalMat = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide });
+  const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff,
+                                                 side: THREE.DoubleSide });
+  const albMats = S.parts.map(p => new THREE.MeshBasicMaterial({
+    color: new THREE.Color(p.c[0] / 255, p.c[1] / 255, p.c[2] / 255),
+    side: THREE.DoubleSide }));
+  // material map: R = metalness, G = roughness, B = clearcoat. Flat per part,
+  // so the model is told what each part is made of rather than guessing it
+  // from colour. Same numbers that drive the target render's shading.
+  const matMats = S.parts.map(p => {
+    const q = p.pbr || (p.m ? [0.88, 0.42, 0.00] : [0.04, 0.60, 0.45]);
+    return new THREE.MeshBasicMaterial({
+      color: new THREE.Color(q[0], q[1], q[2]),
+      side: THREE.DoubleSide });
+  });
+
+  // shading pass: where the fixed key light falls on THIS rung's geometry.
+  // Normals already imply it, but only via a dot product the network has to
+  // discover; this hands over the answer as image intensity, which is the
+  // form a diffusion model is best at matching. Crude geometry yields crude
+  // shading, which is exactly the signal the renderer is meant to refine.
+  // Packed scalars: R = depth, G = shading. Both are single numbers, and
+  // writing each into its own RGB image cost three channels to carry one.
+  // The trainer sums the pretrained depth filters into channel 0, which is
+  // bit-identical to feeding it the old triplicated depth map.
+  const packMat = new THREE.ShaderMaterial({
+    uniforms: { near: { value: 1 }, far: { value: 10 },
+                L: { value: LIGHT }, amb: { value: 0.26 } },
+    vertexShader: `varying float vz; varying vec3 vN;
+      void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0);
+        vz = -mv.z; vN = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `varying float vz; varying vec3 vN;
+      uniform float near; uniform float far; uniform vec3 L; uniform float amb;
+      void main(){
+        float d = clamp(1.0-(vz-near)/(far-near),0.0,1.0);
+        vec3 n = normalize(vN);
+        float sh = max(dot(n, L), 0.0) * 0.82;
+        sh += max(dot(n, normalize(vec3(1.0,1.0,1.0))), 0.0) * 0.20;
+        sh += max(dot(n, normalize(vec3(-1.0,-1.0,0.6))), 0.0) * 0.11;
+        gl_FragColor = vec4(d, clamp(amb + sh, 0.0, 1.0), 0.0, 1.0); }`,
+    side: THREE.DoubleSide });
+
+  const shadeMat = new THREE.ShaderMaterial({
+    uniforms: { L: { value: LIGHT }, amb: { value: 0.26 } },
+    vertexShader: `varying vec3 vN;
+      void main(){ vN = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec3 vN; uniform vec3 L; uniform float amb;
+      void main(){
+        vec3 n = normalize(vN);
+        float d = max(dot(n, L), 0.0) * 0.82;           // key
+        d += max(dot(n, normalize(vec3(1.0,1.0,1.0))), 0.0) * 0.20;
+        d += max(dot(n, normalize(vec3(-1.0,-1.0,0.6))), 0.0) * 0.11;
+        float v = clamp(amb + d, 0.0, 1.0);
+        gl_FragColor = vec4(v, v, v, 1.0); }`,
+    side: THREE.DoubleSide });
+
+  // The lighting term, rendered the way the target is rendered.
+  // An analytic dot(N,L) missed the environment map entirely (metals
+  // correlated 0.25 with the target) and the tone curve on top of that.
+  // Rendering the real material with a WHITE base colour gives exactly the
+  // factor the target multiplies the albedo by, so target ~ albedo * shading
+  // holds by construction for metals and dielectrics alike.
+  const whiteLitMats = S.parts.map((p, i) => {
+    const m = stdMats[i].clone();
+    m.color = new THREE.Color(1, 1, 1);
+    return m;
+  });
+  scC.environment = scT.environment;
+  scC.add(new THREE.AmbientLight(0xffffff, 0.26));
+  {
+    const k2 = key.clone(); k2.target = key.target.clone();
+    scC.add(k2, k2.target);
+    const f1 = new THREE.DirectionalLight(0xffffff, 0.20);
+    f1.position.set(1, 1, 1);
+    const f2 = new THREE.DirectionalLight(0xffffff, 0.11);
+    f2.position.set(-1, -1, 0.6);
+    scC.add(f1, f2);
+  }
+
+  const rungs = {};
+  for (const [name, arr] of [['cad', S.parts], ['pr', S.prims],
+                             ['bx', S.boxes]]) {
+    rungs[name] = arr.map(p => {
+      const mesh = new THREE.Mesh(geom(p), depthMat);
+      mesh.visible = false;
+      scC.add(mesh);
+      return mesh;
+    });
+  }
+
+  // ---------- capture driver ----------------------------------------------
+  const post = async (path, body) => {
+    const r = await fetch(path, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body) });
+    return r.json();
+  };
+  const place = (az, el, dist, t) => {
+    const ce = Math.cos(el), se = Math.sin(el);
+    cam.position.set(t.x + dist * Math.cos(az) * ce,
+                     t.y + dist * Math.sin(az) * ce,
+                     t.z + dist * se);
+    cam.lookAt(t.x, t.y, t.z);
+  };
+  // ---------- disassembled layout: the photo a user actually has ----------
+  // At session start the object does not exist yet -- the user has a box of
+  // parts on a table. Laying the parts out is therefore the realistic
+  // reference, and it is also the most informative one: every part is
+  // separated and unoccluded, unlike a finished assembly where half of them
+  // are buried inside.
+  let laidOut = false;
+  // Lay the parts out the way they sit on a bench: packed close, slightly
+  // overlapping, not spread across a table. A wide shot of a 60-part kit
+  // makes every part a speck, so the layout is tight AND the reference shots
+  // frame a SUBSET of the pile close up -- which is also what a real photo of
+  // a parts box looks like.
+  const layoutParts = (seed, subset, isolate) => {
+    const n = cadMeshes.length;
+    // reset first: boxes must describe the parts in their ORIGINAL places,
+    // or a second layout call measures the previous layout's scatter
+    cadMeshes.forEach(m => { m.position.set(0, 0, 0); m.rotation.z = 0;
+                             m.visible = true; m.updateMatrixWorld(true); });
+    const boxes = cadMeshes.map(m => new THREE.Box3().setFromObject(m));
+    const size = boxes.map(b => b.getSize(new THREE.Vector3()));
+    const foot = size.map(v => Math.max(v.x, v.y));
+    const idxs = [...Array(n).keys()].sort((a, b) => foot[b] - foot[a]);
+    const groundZ = Math.min(...boxes.map(b => b.min.z));
+    let rnd = seed || 1;
+    const rand = () => (rnd = (rnd * 16807) % 2147483647) / 2147483647;
+    // shelf packing: walk rows, each part placed right after the previous,
+    // with only a hair of gap. Big parts first so rows stay dense.
+    const width = Math.sqrt(idxs.reduce((s, i) => s + foot[i] * foot[i], 0))
+                  * 1.5;
+    let x = 0, y = 0, rowH = 0;
+    const place = [];
+    for (const pi of idxs) {
+      const w = foot[pi] * 1.03;
+      if (x + w > width && x > 0) { x = 0; y -= rowH * 1.03; rowH = 0; }
+      place.push([pi, x + w / 2, y - foot[pi] / 2]);
+      x += w;
+      rowH = Math.max(rowH, foot[pi]);
+    }
+    const cx = width / 2, cy = (y - rowH) / 2;
+    place.forEach(([pi, px, py]) => {
+      const b = boxes[pi];
+      cadMeshes[pi].position.set(
+        ctr.x + px - cx - (b.min.x + b.max.x) / 2 + (rand() - 0.5) * foot[pi] * 0.08,
+        ctr.y + py - cy - (b.min.y + b.max.y) / 2 + (rand() - 0.5) * foot[pi] * 0.08,
+        groundZ - b.min.z);
+      cadMeshes[pi].rotation.z = (rand() - 0.5) * 0.6;
+      cadMeshes[pi].visible = true;
+    });
+    laidOut = true;
+    // What this photo frames. A kit photo cannot show a washer and a housing
+    // legibly at once, so the bank covers both regimes: a wide shot of
+    // everything, and close-ups of the SMALL parts, which is exactly what a
+    // person does when asked for a clearer picture.
+    const lb = new THREE.Box3();
+    let pick = place;
+    if (typeof subset === 'string' && subset.startsWith('band')) {
+      // band0 = largest third, band1 = middle, band2 = smallest.
+      // Only that band is laid out and visible, so the shot is not dominated
+      // by parts from another size class.
+      const b = parseInt(subset.slice(4), 10);
+      const bySize = [...place].sort((x, y) => foot[y[0]] - foot[x[0]]);
+      const per = Math.ceil(bySize.length / 3);
+      pick = bySize.slice(b * per, Math.min((b + 1) * per, bySize.length));
+      if (!pick.length) pick = bySize.slice(0, 4);
+      // re-pack just this band tightly, so it fills the frame
+      const fs = pick.map(x => foot[x[0]]);
+      // tight: total area of the parts, laid nearly square, with a hair of
+      // gap. The looser this is, the smaller everything looks in frame.
+      const w2 = Math.sqrt(fs.reduce((s2, f2) => s2 + f2 * f2, 0)) * 1.02;
+      let x2 = 0, y2 = 0, rowH2 = 0;
+      pick.forEach((entry) => {
+        const pi = entry[0];
+        const w = foot[pi] * 1.02;
+        if (x2 + w > w2 && x2 > 0) { x2 = 0; y2 -= rowH2 * 1.02; rowH2 = 0; }
+        entry[1] = x2 + w / 2;
+        entry[2] = y2 - foot[pi] / 2;
+        x2 += w;
+        rowH2 = Math.max(rowH2, foot[pi]);
+      });
+      const cx2 = w2 / 2, cy2 = (y2 - rowH2) / 2;
+      pick.forEach(([pi, px, py]) => {
+        const bb2 = boxes[pi];
+        cadMeshes[pi].position.set(
+          ctr.x + px - cx2 - (bb2.min.x + bb2.max.x) / 2,
+          ctr.y + py - cy2 - (bb2.min.y + bb2.max.y) / 2,
+          groundZ - bb2.min.z);
+      });
+      const keep = new Set(pick.map(x => x[0]));
+      cadMeshes.forEach((m, i) => m.visible = keep.has(i));
+    } else if (subset === 'small') {
+      const bySize = [...place].sort(
+        (a, b) => foot[a[0]] - foot[b[0]]);
+      const k = Math.max(4, Math.ceil(bySize.length * 0.35));
+      const chosen = bySize.slice(0, k);
+      // keep those that sit near each other, so the crop is one region
+      const c0 = chosen[Math.floor(chosen.length / 2)];
+      chosen.sort((a, b) => (Math.hypot(a[1]-c0[1], a[2]-c0[2])
+                             - Math.hypot(b[1]-c0[1], b[2]-c0[2])));
+      pick = chosen.slice(0, Math.max(4, Math.ceil(k * 0.6)));
+    } else if (subset && subset < 1) {
+      // centre the crop on the DENSEST part of the pile, not a random one:
+      // a crop of empty bench is worthless as a reference
+      let bestI = 0, bestN = -1;
+      const rad0 = Math.max(...foot) * 1.5;
+      place.forEach((c0, ii) => {
+        const n2 = place.filter(q => Math.hypot(q[1]-c0[1], q[2]-c0[2]) < rad0)
+                        .length;
+        if (n2 > bestN) { bestN = n2; bestI = ii; }
+      });
+      const c0 = place[bestI];
+      const near = [...place].sort(
+        (a, b) => (Math.hypot(a[1]-c0[1], a[2]-c0[2])
+                   - Math.hypot(b[1]-c0[1], b[2]-c0[2])));
+      pick = near.slice(0, Math.max(4, Math.ceil(place.length * subset)));
+    }
+    if (isolate) {
+      const keep = new Set(pick.map(x => x[0]));
+      cadMeshes.forEach((m, i) => m.visible = keep.has(i));
+    }
+    // measure AFTER every mesh has been repositioned, or the camera frames
+    // where the parts used to be
+    cadMeshes.forEach(m => m.updateMatrixWorld(true));
+    pick.forEach(([pi]) => lb.expandByObject(cadMeshes[pi]));
+    return { c: lb.getCenter(new THREE.Vector3()),
+             s: lb.getSize(new THREE.Vector3()) };
+  };
+  const clearLayout = () => {
+    if (!laidOut) return;
+    cadMeshes.forEach(m => { m.position.set(0, 0, 0); m.rotation.z = 0; });
+    laidOut = false;
+  };
+
+  const setState = k => {
+    clearLayout();
+    const on = new Set(S.order.slice(0, k));
+    cadMeshes.forEach((m, i) => m.visible = on.has(i));
+    return on;
+  };
+  const stateBounds = () => {
+    const b = new THREE.Box3();
+    let any = false;
+    cadMeshes.forEach(m => { if (m.visible) { b.expandByObject(m);
+                                              any = true; } });
+    if (!any) b.setFromObject(scT);
+    const c = b.getCenter(new THREE.Vector3());
+    return { c, r: b.getSize(new THREE.Vector3()).length() / 2 };
+  };
+  // Box art shows the product, not the user's unit: a different colourway, a
+  // later revision, different photography. Applying that shift here keeps the
+  // model from trusting a finished reference as if it were the object itself.
+  // Recolour the object for this session: the rendered material AND the
+  // albedo conditioning, by the same amount, so the conditioning stays
+  // truthful. The shape no longer predicts the colour, which is what forces
+  // the albedo channel to be read instead of memorised.
+  const setColourway = (seed) => {
+    let rnd = seed || 1;
+    const rand = () => (rnd = (rnd * 16807) % 2147483647) / 2147483647;
+    const h0 = rand(), sj = 0.7 + rand() * 0.6, lj = 0.85 + rand() * 0.3;
+    stdMats.forEach((m, i) => {
+      // The albedo map holds sRGB; the render material holds the SAME colour
+      // converted to linear. Assigning one value to both breaks that, and the
+      // conditioning stops predicting the target (the analytic baseline went
+      // 0.072 -> 0.117). Derive from the sRGB original and convert once.
+      if (!albMats[i].userData.orig)
+        albMats[i].userData.orig = albMats[i].color.clone();
+      const hsl = {};
+      albMats[i].userData.orig.getHSL(hsl);
+      const h = (hsl.h + h0 + i * 0.017) % 1.0;
+      const sat = Math.min(1, hsl.s * sj);
+      const lum = Math.min(0.92, Math.max(0.08, hsl.l * lj));
+      const srgb = new THREE.Color().setHSL(h, sat, lum);
+      albMats[i].color.copy(srgb);
+      m.color.copy(srgb).convertSRGBToLinear();
+      m.userData.base = m.color.clone();      // product shift starts here
+    });
+  };
+
+  const setProductShift = (on, seed) => {
+    let rnd = seed || 1;
+    const rand = () => (rnd = (rnd * 16807) % 2147483647) / 2147483647;
+    stdMats.forEach((m, i) => {
+      if (!on) {
+        if (m.userData.base) m.color.copy(m.userData.base);
+        return;
+      }
+      if (!m.userData.base) m.userData.base = m.color.clone();
+      const hsl = {};
+      m.userData.base.getHSL(hsl);
+      m.color.setHSL((hsl.h + 0.06 + rand() * 0.30) % 1.0,
+                     Math.min(1, hsl.s * (0.75 + rand() * 0.5)),
+                     Math.min(0.92, Math.max(0.08,
+                              hsl.l * (0.85 + rand() * 0.35))));
+    });
+  };
+
+  const setSession = s => {
+    // lighting is fixed and flat: sessions no longer vary it, so the mapping
+    // from conditioning to target is deterministic
+    renderer.toneMappingExposure = 1.0;
+    stdMats.forEach(m => m.envMapIntensity = 1.0);
+  };
+  const shoot = () => renderer.domElement.toDataURL('image/png');
+
+  const renderTarget = () => {
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.setClearColor(0x000000, 0);
+    renderer.render(scT, cam);
+    return shoot();
+  };
+  const renderCond = (rung, mat, on, nearFar) => {
+    const lit = mat === 'shade';
+    renderer.toneMapping = lit ? THREE.ACESFilmicToneMapping
+                               : THREE.NoToneMapping;
+    renderer.outputEncoding = lit ? THREE.sRGBEncoding
+                                  : THREE.LinearEncoding;
+    renderer.setClearColor(0x000000, 1);
+    for (const [name, meshes] of Object.entries(rungs))
+      meshes.forEach((m, i) => {
+        m.visible = name === rung && on.has(i);
+        if (m.visible) m.material =
+          mat === 'alb' ? albMats[i] :
+          mat === 'mat' ? matMats[i] :
+          mat === 'depth' ? depthMat :
+          mat === 'pack' ? packMat :
+          mat === 'shade' ? whiteLitMats[i] :
+          mat === 'mask' ? whiteMat : normalMat;
+      });
+    if (nearFar) { depthMat.uniforms.near.value = nearFar[0];
+                   depthMat.uniforms.far.value = nearFar[1];
+                   packMat.uniforms.near.value = nearFar[0];
+                   packMat.uniforms.far.value = nearFar[1]; }
+    renderer.render(scC, cam);
+    return shoot();
+  };
+
+  // R = depth, G = luminance of the lighting term. Two renders because they
+  // need different tone curves; combined here so the capture still writes a
+  // single map per rung.
+  const packCanvas = document.createElement('canvas');
+  packCanvas.width = packCanvas.height = RES;
+  const packCtx = packCanvas.getContext('2d', { willReadFrequently: true });
+  const grab = () => {
+    packCtx.clearRect(0, 0, RES, RES);
+    packCtx.drawImage(renderer.domElement, 0, 0, RES, RES);
+    return packCtx.getImageData(0, 0, RES, RES).data;
+  };
+  const renderPack = (rung, on, nearFar) => {
+    renderCond(rung, 'depth', on, nearFar);
+    const dep = grab();
+    renderCond(rung, 'shade', on);
+    const sh = grab();
+    const out = packCtx.createImageData(RES, RES);
+    for (let i = 0; i < dep.length; i += 4) {
+      out.data[i] = dep[i];
+      out.data[i + 1] = (sh[i] * 77 + sh[i + 1] * 150 + sh[i + 2] * 29) >> 8;
+      out.data[i + 2] = 0;
+      out.data[i + 3] = 255;
+    }
+    packCtx.putImageData(out, 0, 0);
+    return packCanvas.toDataURL('image/png');
+  };
+
+  let batch = [], metaBatch = [];
+  const flush = async () => {
+    if (!batch.length) return;
+    await post('/save', { object: S.object, frames: batch, meta: metaBatch });
+    batch = []; metaBatch = [];
+  };
+
+  const rows = S.script;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    setSession(S.sessions[r.sess]);
+    let on;
+    setColourway(S.sessions[r.sess] && S.sessions[r.sess].cw);
+    setProductShift(!!r.shift, r.shift || 1);
+    if (r.kind === 'ref' && r.layout) {
+      cadMeshes.forEach(m => m.visible = true);
+      on = new Set(cadMeshes.map((_, i) => i));
+      // Frame so the parts FILL the picture. The distance that fits every
+      // part is the wrong target -- a kit spread over a bench then becomes
+      // specks. Instead fit a fraction of the layout (r.wide < 1 crops in),
+      // accepting that edges leave frame, which is what a real photo does.
+      const fov = cam.fov * Math.PI / 180;
+      // Try progressively closer framings, and different angles, until the
+      // parts occupy at least MIN_FILL of the picture. A reference photo of
+      // mostly empty bench teaches the model nothing.
+      const MIN_FILL = 0.30;
+      const frame = (wide, az, el) => {
+        const lay2 = layoutParts(r.layout, r.subset || 1, !!r.isolate);
+        const half2 = Math.max(lay2.s.x, lay2.s.y) / 2;
+        const d2 = (half2 / Math.tan(fov / 2)) * wide;
+        const ce2 = Math.cos(el), se2 = Math.sin(el);
+        cam.position.set(lay2.c.x + d2 * Math.cos(az) * ce2,
+                         lay2.c.y + d2 * Math.sin(az) * ce2,
+                         lay2.c.z + d2 * se2);
+        cam.lookAt(lay2.c.x, lay2.c.y, lay2.c.z);
+        cam.updateMatrixWorld(true);
+      };
+      const fillOf = () => {
+        renderer.setClearColor(0x000000, 0);
+        renderer.render(scT, cam);
+        const gl = renderer.getContext();
+        const w = 64, h = 64;
+        const px = new Uint8Array(w * h * 4);
+        const fb = renderer.getRenderTarget();
+        renderer.setRenderTarget(null);
+        gl.readPixels(0, 0, RES, RES, gl.RGBA, gl.UNSIGNED_BYTE,
+                      new Uint8Array(0));   // no-op guard on some drivers
+        // sample the canvas instead: cheap and driver-independent
+        const c2 = document.createElement('canvas');
+        c2.width = w; c2.height = h;
+        const cx2 = c2.getContext('2d');
+        cx2.drawImage(renderer.domElement, 0, 0, w, h);
+        const dat = cx2.getImageData(0, 0, w, h).data;
+        let n2 = 0;
+        for (let i2 = 3; i2 < dat.length; i2 += 4) if (dat[i2] > 12) n2++;
+        renderer.setRenderTarget(fb);
+        return n2 / (w * h);
+      };
+      let bestFill = -1, bestCam = null;
+      const zooms = [r.wide || 0.8, 0.58, 0.44, 0.33, 0.25,
+                     0.19, 0.14, 0.10];
+      outer:
+      for (const zoom of zooms) {
+        for (const dAz of [0, 0.9, -0.9, 1.8, 2.7, -1.8]) {
+          frame(zoom, r.az + dAz, r.el);
+          const f2 = fillOf();
+          if (f2 > bestFill) { bestFill = f2;
+            bestCam = { p: cam.position.clone(), q: cam.quaternion.clone() }; }
+          if (f2 >= MIN_FILL) break outer;
+        }
+      }
+      cam.position.copy(bestCam.p);
+      cam.quaternion.copy(bestCam.q);
+      const lay = { c: new THREE.Vector3(), s: new THREE.Vector3() };
+      // Frame from THIS GROUP's extent, never the whole object's radius --
+      // a band of four washers must be shot from washer distance. `wide`
+      // below 1 crops in further, so the parts fill the frame; edges leaving
+      // the picture is what a real close photo does.
+    } else {
+      on = setState(r.st);
+      place(r.az, r.el, r.dist, new THREE.Vector3(r.tx, r.ty, r.tz));
+    }
+    const sb = stateBounds();
+    const nf = [Math.max(r.dist - sb.r * 1.3, r.dist * 0.05),
+                r.dist + sb.r * 1.3];
+    batch.push({ name: r.id + '_tgt', png: renderTarget() });
+    if (r.kind === 'pair') {
+      for (const [rg, tag] of [['cad', 'cad'], ['pr', 'pr'], ['bx', 'bx']]) {
+        batch.push({ name: `${r.id}_p${tag}`,
+                     png: renderPack(rg, on, nf) });
+        batch.push({ name: `${r.id}_n${tag}`,
+                     png: renderCond(rg, 'normal', on) });
+        batch.push({ name: `${r.id}_a${tag}`,
+                     png: renderCond(rg, 'alb', on) });
+        batch.push({ name: `${r.id}_m${tag}`,
+                     png: renderCond(rg, 'mat', on) });
+
+      }
+      batch.push({ name: r.id + '_mask',
+                   png: renderCond('cad', 'mask', on) });
+    }
+    metaBatch.push(Object.assign({ near: nf[0], far: nf[1] }, r));
+    if (batch.length >= 15) await flush();
+    if (i % 10 === 0) log(`${i + 1}/${rows.length}`);
+  }
+  await flush();
+  await post('/done', { object: S.object });
+  log('DONE');
+  document.title = 'CAPTURE DONE';
+})().catch(e => {
+  document.getElementById('log').textContent = 'ERR ' + e.message;
+  document.title = 'CAPTURE ERR';
+});
+</script>

@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Blockout and Target</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{--ink:#16191d;--muted:#6a747e;--faint:#9aa4ad;--paper:#f6f5f2;
+--card:#fff;--rule:#e0dcd4;--accent:#9a4b25}
+@media (prefers-color-scheme:dark){:root{--ink:#eef1f4;--muted:#8d97a1;
+--faint:#6b747d;--paper:#121518;--card:#1a1e22;--rule:#2a2f35;--accent:#d98a5f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);
+font:14px/1.5 "IBM Plex Sans",system-ui,sans-serif;overflow:hidden}
+.top{position:fixed;top:0;left:0;right:0;height:52px;display:flex;
+align-items:center;gap:14px;padding:0 18px;border-bottom:1px solid var(--rule);
+background:var(--card);z-index:5}
+.top b{font-weight:600}
+select{font:inherit;background:var(--paper);color:var(--ink);
+border:1px solid var(--rule);border-radius:6px;padding:6px 10px;max-width:280px}
+.panes{position:fixed;top:52px;bottom:64px;left:0;right:0;display:flex}
+.pane{flex:1;position:relative;border-right:1px solid var(--rule)}
+.pane:last-child{border-right:0}
+.pane canvas{width:100%;height:100%;display:block;cursor:grab}
+.pane canvas:active{cursor:grabbing}
+.tag{position:absolute;top:12px;left:14px;font-size:11px;letter-spacing:.1em;
+text-transform:uppercase;color:var(--faint);pointer-events:none}
+.bottom{position:fixed;bottom:0;left:0;right:0;height:64px;display:flex;
+align-items:center;gap:12px;padding:0 18px;border-top:1px solid var(--rule);
+background:var(--card)}
+button{font:inherit;font-weight:500;background:var(--paper);color:var(--ink);
+border:1px solid var(--rule);border-radius:6px;padding:7px 15px;cursor:pointer}
+button.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+button:disabled{opacity:.35;cursor:default}
+input[type=range]{flex:1;accent-color:var(--accent)}
+.count{color:var(--muted);font-variant-numeric:tabular-nums;min-width:110px}
+.hint{color:var(--faint);font-size:12px}
+.load{position:fixed;inset:52px 0 64px;display:grid;place-items:center;
+color:var(--muted);background:var(--paper);z-index:4}
+</style></head><body>
+<div class="top">
+  <b>Blockout &rarr; target</b>
+  <select id="pick"></select>
+  <span class="hint" id="meta"></span>
+</div>
+<div class="panes">
+  <div class="pane"><span class="tag">blockout &middot; what the agent draws</span>
+    <canvas id="cl"></canvas></div>
+  <div class="pane"><span class="tag">target &middot; real CAD</span>
+    <canvas id="cr"></canvas></div>
+</div>
+<div class="load" id="load">loading scene&hellip;</div>
+<div class="bottom">
+  <button id="prev">&lsaquo;</button>
+  <button id="play" class="on">&#9658; Play</button>
+  <button id="next">&rsaquo;</button>
+  <input type="range" id="scrub" min="0" max="1" value="0">
+  <span class="count" id="count"></span>
+  <select id="rung">
+    <option value="boxes">boxes</option>
+    <option value="primitives" selected>primitives</option>
+  </select>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.156.1/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<script>
+const L = mk('cl'), Rr = mk('cr');
+let scene = null, step = 0, playing = true, t = 0, order = [];
+
+function mk(id){
+  const cv = document.getElementById(id);
+  const r = new THREE.WebGLRenderer({canvas: cv, antialias: true});
+  r.setPixelRatio(Math.min(devicePixelRatio, 2));
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  return {cv, r, sc: null, cam: null, meshes: []};
+}
+let az = 0.9, el = 0.45, dist = 1, ctr = new THREE.Vector3(), rad = 1;
+
+function lights(sc, renderer){
+  sc.add(new THREE.AmbientLight(0xffffff, 0.30));
+  const k = new THREE.DirectionalLight(0xffffff, 1.0);
+  k.position.set(1.5, 1.9, 2.4); sc.add(k);
+  const f = new THREE.DirectionalLight(0xffffff, 0.22);
+  f.position.set(-1, -1, 0.6); sc.add(f);
+  const env = new THREE.Scene();
+  env.add(new THREE.Mesh(new THREE.SphereGeometry(60, 16, 8),
+    new THREE.MeshBasicMaterial({color: new THREE.Color().setScalar(0.5),
+                                 side: THREE.BackSide})));
+  const pm = new THREE.PMREMGenerator(renderer);
+  sc.environment = pm.fromScene(env).texture; pm.dispose();
+  sc.background = new THREE.Color(0x000000).setStyle(
+    getComputedStyle(document.body).backgroundColor);
+}
+function geom(m){
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(m.v, 3));
+  g.setIndex(m.f); g.computeVertexNormals(); return g;
+}
+function build(){
+  const rung = document.getElementById('rung').value;
+  // set the framing BEFORE the cameras are made: their near and far planes
+  // come from rad, and using the previous scene's value clips the object away
+  ctr = new THREE.Vector3(...scene.centre); rad = scene.radius;
+  dist = rad * 3.2; order = scene.order; step = 0; t = 0;
+  [[L, rung], [Rr, 'parts']].forEach(([P, which]) => {
+    P.sc = new THREE.Scene(); lights(P.sc, P.r);
+    const src = scene[which];
+    P.meshes = src.map((m, i) => {
+      const p = scene.parts[Math.min(i, scene.parts.length - 1)];
+      const col = new THREE.Color(p.colour[0]/255, p.colour[1]/255,
+                                  p.colour[2]/255).convertSRGBToLinear();
+      const mesh = new THREE.Mesh(geom(m), new THREE.MeshStandardMaterial({
+        color: which === 'parts' ? col : new THREE.Color(0.72, 0.73, 0.75),
+        metalness: which === 'parts' ? p.pbr[0] : 0.0,
+        roughness: which === 'parts' ? p.pbr[1] : 0.62,
+        side: THREE.DoubleSide, flatShading: which !== 'parts'}));
+      mesh.visible = false; P.sc.add(mesh); return mesh;
+    });
+    P.cam = new THREE.PerspectiveCamera(34, 1, rad*0.05, rad*40);
+    P.cam.up.set(0, 0, 1);
+  });
+}
+function place(){
+  [L, Rr].forEach(P => {
+    P.meshes.forEach(m => m.visible = false);
+    for (let i = 0; i < step; i++) { const m = P.meshes[order[i]];
+      if (m) { m.visible = true; m.position.set(0,0,0); } }
+    const cur = P.meshes[order[step]];
+    if (cur){ cur.visible = true;
+      const k = 1 - Math.pow(1 - Math.min(t,1), 3);
+      cur.position.set(0, 0, rad * 0.8 * (1 - k)); }
+  });
+  document.getElementById('count').textContent =
+    'part ' + Math.min(step+1, order.length) + ' / ' + order.length;
+  document.getElementById('scrub').value = step;
+}
+let last = performance.now();
+function loop(now){
+  const dt = Math.min((now-last)/1000, .05); last = now;
+  if (scene){
+    if (playing){ t += dt*1.7;
+      if (t >= 1.5){ t = 0;
+        if (step < order.length-1) step++;
+        else { playing = false;
+               document.getElementById('play').classList.remove('on'); } } }
+    place();
+    const ce = Math.cos(el), se = Math.sin(el);
+    [L, Rr].forEach(P => {
+      const w = P.cv.clientWidth, h = P.cv.clientHeight;
+      P.r.setSize(w, h, false);
+      P.cam.aspect = w/h; P.cam.updateProjectionMatrix();
+      P.cam.position.set(ctr.x + dist*Math.cos(az)*ce,
+                         ctr.y + dist*Math.sin(az)*ce, ctr.z + dist*se);
+      P.cam.lookAt(ctr); P.r.render(P.sc, P.cam);
+    });
+  }
+  requestAnimationFrame(loop);
+}
+async function load(id){
+  document.getElementById('load').style.display = 'grid';
+  const buf = await (await fetch('../scenes/' + id + '.json.gz')).arrayBuffer();
+  scene = JSON.parse(pako.ungzip(new Uint8Array(buf), {to: 'string'}));
+  build();
+  document.getElementById('scrub').max = order.length - 1;
+  document.getElementById('meta').textContent =
+    scene.parts.length + ' parts · ' + order.length + ' steps';
+  playing = true; document.getElementById('play').classList.add('on');
+  document.getElementById('load').style.display = 'none';
+}
+(async () => {
+  const idx = await (await fetch('../scenes/index.json')).json();
+  const sel = document.getElementById('pick');
+  idx.forEach(r => { const o = document.createElement('option');
+    o.value = r.id; o.textContent = r.id + '  (' + r.parts + ' parts)';
+    sel.appendChild(o); });
+  sel.onchange = () => load(sel.value);
+  document.getElementById('rung').onchange = () => { build(); };
+  // ?id=<object>&step=<n> opens a specific state, so a particular moment
+  // in a build can be linked to directly
+  const q = new URLSearchParams(location.search);
+  await load(q.get('id') || idx[0].id);
+  if (q.has('id')) sel.value = q.get('id');
+  if (q.has('step')) {
+    step = Math.max(0, Math.min(+q.get('step'), order.length - 1));
+    t = 1; playing = false;
+    document.getElementById('play').classList.remove('on');
+  }
+  requestAnimationFrame(loop);
+})();
+document.getElementById('next').onclick = () => {
+  if (step < order.length-1){ step++; t = 1; } };
+document.getElementById('prev').onclick = () => { if (step > 0){ step--; t = 1; } };
+document.getElementById('play').onclick = e => {
+  playing = !playing; e.target.classList.toggle('on', playing);
+  if (playing && step >= order.length-1){ step = 0; t = 0; } };
+document.getElementById('scrub').oninput = e => {
+  step = +e.target.value; t = 1; playing = false;
+  document.getElementById('play').classList.remove('on'); };
+let drag = null;
+document.querySelectorAll('.pane canvas').forEach(c => {
+  c.addEventListener('pointerdown', e => drag = {x: e.clientX, y: e.clientY});
+  c.addEventListener('wheel', e => { e.preventDefault();
+    dist = Math.max(rad*1.2, Math.min(rad*9, dist*(1 + e.deltaY*0.0012)));
+  }, {passive: false});
+});
+addEventListener('pointerup', () => drag = null);
+addEventListener('pointermove', e => {
+  if (!drag) return;
+  az -= (e.clientX-drag.x)*0.008;
+  el = Math.max(-1.3, Math.min(1.3, el + (e.clientY-drag.y)*0.006));
+  drag = {x: e.clientX, y: e.clientY};
+});
+</script></body></html>
