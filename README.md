@@ -26,6 +26,7 @@ demo/            blockout on the left, target on the right, play through the bui
 src/             the renderer, the dataset builder, and a minimal scene reader
 docs/            format notes and figures
 serve.py         starts a local server and opens the demo
+training/        training the renderer on this data: code, settings and results
 ```
 
 ## Quick start
