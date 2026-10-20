@@ -1,0 +1,16 @@
+# Python 3.11 and a CUDA GPU with at least 24 GB (the runs used an H200; peak
+# use was 19 GB). Exact versions used: see "Software" in README.md.
+torch                                            # CUDA build
+git+https://github.com/huggingface/diffusers     # needs Flux2KleinPipeline
+transformers>=4.57
+peft
+accelerate
+huggingface_hub>=0.34
+safetensors
+tokenizers
+sentencepiece
+regex
+numpy
+pillow
+matplotlib
+lpips                                            # metrics only
