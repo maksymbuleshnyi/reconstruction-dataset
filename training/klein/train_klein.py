@@ -237,6 +237,17 @@ def main():
                          "schedule). Default: constant. A constant 3e-4 left the "
                          "N=100 fixed-set loss noisy and 0.01 above its 1e-4 level")
     ap.add_argument("--rank", type=int, default=32)
+    ap.add_argument("--lora-targets", default="attn", choices=["attn", "all-linear"],
+                    help="attn: the attention projections (as for the curves); all-linear: "
+                         "every linear layer of every transformer block, feed-forward included")
+    ap.add_argument("--train-blocks", default="",
+                    help="also train these transformer blocks fully (their real weights, "
+                         "not an adapter): 'double', 'single', 'all', 'single:a-b', or a "
+                         "comma list. Saved as differences from the base model "
+                         "(blocks_delta.safetensors) and added to the model at load time")
+    ap.add_argument("--block-lr", type=float, default=2e-5,
+                    help="peak learning rate of the fully trained blocks (follows the same "
+                         "warm-up and decay as --lr)")
     ap.add_argument("--lora-alpha", type=int, default=None,
                     help="LoRA scaling numerator (scale = alpha / rank). Default: "
                          "= rank, i.e. scale 1 at any rank, which makes a rank-128 "
@@ -278,6 +289,9 @@ def main():
                     help="chance per sample that the history image comes without part "
                          "labels, as a real photo of unknown camera would")
     ap.add_argument("--val-every", type=int, default=250)
+    ap.add_argument("--grad-ckpt", default="on", choices=["on", "off", "auto"],
+                    help="gradient checkpointing: saves memory, costs ~25%% speed; auto = off "
+                         "on GPUs with more than 80 GB (H200), on elsewhere")
     ap.add_argument("--val-frames", type=int, default=32)
     ap.add_argument("--save-every", type=int, default=1000)
     ap.add_argument("--patience", type=int, default=0,
@@ -289,6 +303,10 @@ def main():
                          "held-out image error as <out>/lora_best (+ best.json)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--resume", default=None, help="LoRA folder to continue from")
+    ap.add_argument("--eval-levels", type=int, default=0,
+                    help="with --eval-only: score every fixed frame at this many noise "
+                         "levels spread from almost clean to pure noise (0 = each frame "
+                         "at its own single level, as during training)")
     ap.add_argument("--eval-only", action="store_true",
                     help="load --resume, compute the held-out fixed-set loss split by "
                          "noise level (4 bands of sigma) and exit; use with a larger "
@@ -309,7 +327,7 @@ def main():
     ap.add_argument("--bias-drop", type=float, default=0.15,
                     help="per reference: chance its bias is withheld, so photos "
                          "without labels still work")
-    ap.add_argument("--substrate", action="store_true",
+    ap.add_argument("--substrate", action=argparse.BooleanOptionalAction, default=False,
                     help="also feed the reference-coloured analytic render "
                          "(part colours read from the photos through their "
                          "id maps) as an input aligned with the target")
@@ -323,6 +341,10 @@ def main():
                          "aligned with the blockout and one aligned with each "
                          "reference photo (from its id map); attention has to "
                          "learn to match the colours")
+    ap.add_argument("--id-grey", action="store_true",
+                    help="with --id-images: the capture's grey part levels "
+                         "(k / (n + 1), as in the pack's B channel) instead of "
+                         "random colours, the same on the blockout and the photos")
     ap.add_argument("--part-ids", default="rope", choices=["none", "rope", "embed"],
                     help="rope: the part id under each token goes on the 4th "
                          "position axis; embed: it is added to every image "
@@ -363,11 +385,15 @@ def main():
     vae.to(dev).requires_grad_(False)
     transformer.to(dev).requires_grad_(False)
     n_single = len(transformer.single_transformer_blocks)
+    if a.lora_targets == "all-linear":
+        targets = [n for n, m in transformer.named_modules()
+                   if isinstance(m, torch.nn.Linear)
+                   and n.startswith(("transformer_blocks.", "single_transformer_blocks."))]
+    else:
+        targets = (["to_k", "to_q", "to_v", "to_out.0", "to_qkv_mlp_proj"]
+                   + [f"single_transformer_blocks.{i}.attn.to_out" for i in range(n_single)])
     lcfg = LoraConfig(r=a.rank, lora_alpha=a.lora_alpha or a.rank, init_lora_weights="gaussian",
-                      target_modules=["to_k", "to_q", "to_v", "to_out.0",
-                                      "to_qkv_mlp_proj"]
-                      + [f"single_transformer_blocks.{i}.attn.to_out"
-                         for i in range(n_single)])
+                      target_modules=targets)
     transformer.add_adapter(lcfg)
     if a.resume:
         from peft import set_peft_model_state_dict
@@ -382,9 +408,41 @@ def main():
         set_peft_model_state_dict(transformer, convert_unet_state_dict_to_peft(sd),
                                   adapter_name="default")
         print("[model] resumed LoRA from", a.resume, flush=True)
+    # fully trained blocks: their own weights (not the adapter) become trainable;
+    # the base values are kept on the CPU so only the change is saved
+    block_names, block_orig = [], {}
+    if a.train_blocks:
+        prefixes = []
+        for part in a.train_blocks.split(","):
+            kind, _, rng_s = part.partition(":")
+            blocks = {"double": ("transformer_blocks", len(transformer.transformer_blocks)),
+                      "single": ("single_transformer_blocks", n_single)}
+            for k in (["double", "single"] if kind == "all" else [kind]):
+                name, n = blocks[k]
+                lo, hi = (int(x) for x in rng_s.split("-")) if rng_s else (0, n - 1)
+                prefixes += ["%s.%d." % (name, i) for i in range(lo, hi + 1)]
+        for n, prm in transformer.named_parameters():
+            if n.startswith(tuple(prefixes)) and "lora_" not in n:
+                prm.requires_grad_(True)
+                block_names.append(n)
+                block_orig[n] = prm.detach().to("cpu", torch.bfloat16).clone()
+    delta_f = os.path.join(a.resume, "blocks_delta.safetensors") if a.resume else None
+    if delta_f and os.path.exists(delta_f):              # continue / evaluate a block run
+        from safetensors.torch import load_file
+        delta = load_file(delta_f)
+        with torch.no_grad():
+            hit = 0
+            for n, prm in transformer.named_parameters():
+                k = n.replace(".base_layer", "")
+                if k in delta:
+                    prm.add_(delta[k].to(prm.device, prm.dtype)); hit += 1
+        print("[model] added trained block weights for %d of %d tensors" % (hit, len(delta)), flush=True)
     params = [p for p in transformer.parameters() if p.requires_grad]
-    for p in params:                       # LoRA weights train in fp32
+    for p in params:                       # trained weights in fp32
         p.data = p.data.float()
+    block_set = set(block_names)
+    block_params = [p for n, p in transformer.named_parameters() if n in block_set]
+    lora_params = [p for n, p in transformer.named_parameters() if p.requires_grad and n not in block_set]
     embed = None
     if a.part_ids == "embed":
         embed = PartEmbed(transformer.config.num_attention_heads
@@ -392,11 +450,22 @@ def main():
         if a.resume and os.path.exists(os.path.join(a.resume, "part_embed.pt")):
             embed.load_state_dict(torch.load(os.path.join(a.resume, "part_embed.pt"), map_location=dev))
         params += list(embed.parameters())
-    print("[model] LoRA rank %d: %.1fM trainable of %.2fB"
-          % (a.rank, sum(p.numel() for p in params) / 1e6,
+        lora_params += list(embed.parameters())
+    print("[model] LoRA rank %d (%s): %.1fM trainable; fully trained blocks: %.1fM; of %.2fB"
+          % (a.rank, a.lora_targets, sum(p.numel() for p in lora_params) / 1e6,
+             sum(p.numel() for p in block_params) / 1e6,
              sum(p.numel() for p in transformer.parameters()) / 1e9), flush=True)
-    transformer.enable_gradient_checkpointing()
-    opt = torch.optim.AdamW(params, lr=a.lr, weight_decay=1e-4)
+    big_gpu = torch.cuda.get_device_properties(0).total_memory > 80e9
+    ckpt = a.grad_ckpt == "on" or (a.grad_ckpt == "auto" and not big_gpu)
+    if ckpt:
+        transformer.enable_gradient_checkpointing()
+    print("[model] gradient checkpointing %s (%s, %.0f GB)"
+          % ("on" if ckpt else "off",
+             torch.cuda.get_device_name(0), torch.cuda.get_device_properties(0).total_memory / 1e9), flush=True)
+    groups = [{"params": lora_params, "lr": a.lr, "base_lr": a.lr}]
+    if block_params:
+        groups.append({"params": block_params, "lr": a.block_lr, "base_lr": a.block_lr})
+    opt = torch.optim.AdamW(groups, lr=a.lr, weight_decay=1e-4)
     guidance_embeds = bool(getattr(transformer.config, "guidance_embeds", False))
 
     codec = Codec(pipe, dev, wdt)
@@ -425,7 +494,7 @@ def main():
             # the photos' id images are withheld with the same chance as the
             # other id-map uses, so photos without maps still work
             maps = [] if (drop_ref_ids or not refs) else item.get("ref_ids", [])
-            pim, rims = id_colour_images(item["ctx"][0], maps, npart, pal or pal_rng)
+            pim, rims = id_colour_images(item["ctx"][0], maps, npart, pal or pal_rng, a.id_grey)
             extra.append(encode(pim))
             tail = [encode(x) if x is not None else None for x in rims]
         ctx_packed, ctx_ids = codec.context(pack, refs, tgt_ids, a.pack_ids,
@@ -493,6 +562,8 @@ def main():
             # the fit; that floor is what keeps fixed_train from reaching 0)
             x0_hat = P._pack_latents(noisy) - float(sigma) * pred.float()
             x0_err = ((x0_hat - P._pack_latents(tgt.float())) ** 2).mean()
+            if with_x0 == "all":                  # also the plain squared error, no background term
+                return loss, x0_err, err.mean()
             return loss, x0_err
         return loss
 
@@ -544,7 +615,7 @@ def main():
         return tot / n, tot_x0 / n
 
     fixed_tr = build_fixed("train", objs, a.val_frames, "training frames", a.variants,
-                           a.max_frames) if (a.val_every and not a.eval_only) else []
+                           a.max_frames) if a.val_every else []
     fixed_ho = build_fixed(a.val_split, None, a.val_frames, "held-out frames",
                            a.val_variants) if a.val_every else []
     # with photos in training, also track the held-out loss WITHOUT a photo and
@@ -554,24 +625,33 @@ def main():
         if (a.val_every and a.history > 0 and not a.eval_only) else []
 
     if a.eval_only:
-        # held-out loss by noise level: each fixed frame has its own timestep,
-        # spread evenly from almost clean to almost pure noise
+        # fixed-set loss by noise level, on the training objects and on the
+        # held-out ones: each fixed frame has its own noise level, spread
+        # evenly from almost clean to almost pure noise
         transformer.eval()
-        bands = {}
-        with torch.no_grad():
-            for tgt, tgt_ids, ctx_packed, ctx_ids, wgt, noise, idx, bias in fixed_ho:
-                l, x0 = loss_at(tgt, tgt_ids, ctx_packed, ctx_ids, wgt, noise, idx, bias, with_x0=True)
-                sig = float(sigmas_all[idx])
-                b = min(int(sig * 4), 3)
-                bands.setdefault(b, []).append((float(l), float(x0)))
         names = ["sigma 0.00-0.25 (fine detail)", "sigma 0.25-0.50", "sigma 0.50-0.75",
                  "sigma 0.75-1.00 (layout, colour)"]
-        allv = [v for b in bands.values() for v in b]
-        print("EVALONLY %s  frames %d  v-loss %.4f  x0 %.4f" % (a.resume, len(allv),
-              np.mean([v[0] for v in allv]), np.mean([v[1] for v in allv])), flush=True)
-        for b in sorted(bands):
-            print("EVALONLY   %-34s n=%3d  v-loss %.4f  x0 %.4f" % (names[b], len(bands[b]),
-                  np.mean([v[0] for v in bands[b]]), np.mean([v[1] for v in bands[b]])), flush=True)
+        for label, batches in (("training objects", fixed_tr), ("held-out objects", fixed_ho)):
+            bands = {}
+            with torch.no_grad():
+                for tgt, tgt_ids, ctx_packed, ctx_ids, wgt, noise, idx, bias in batches:
+                    levels = [idx] if not a.eval_levels else \
+                        [int(999 - t) for t in np.linspace(20, 980, a.eval_levels).round()]
+                    for li in levels:
+                        l, x0, mse = loss_at(tgt, tgt_ids, ctx_packed, ctx_ids, wgt, noise, li, bias, with_x0="all")
+                        sig = float(sigmas_all[li])
+                        bands.setdefault(min(int(sig * 4), 3), []).append((float(l), float(x0), sig, float(mse)))
+            allv = [v for b in bands.values() for v in b]
+            print("EVALONLY %s | %s  points %d  v-loss %.4f  plain-mse %.4f  x0 %.4f" % (a.resume, label, len(allv),
+                  np.mean([v[0] for v in allv]), np.mean([v[3] for v in allv]), np.mean([v[1] for v in allv])), flush=True)
+            for b in sorted(bands):
+                print("EVALONLY   %-17s %-34s n=%3d  v-loss %.4f  plain-mse %.4f  x0 %.4f" % (label, names[b], len(bands[b]),
+                      np.mean([v[0] for v in bands[b]]), np.mean([v[3] for v in bands[b]]),
+                      np.mean([v[1] for v in bands[b]])), flush=True)
+            # the lowest-noise points alone: where a perfect memoriser still errs
+            low = sorted(allv, key=lambda v: v[2])[:max(1, len(allv) // 16)]
+            print("EVALONLY   %-17s %-34s n=%3d  v-loss %.4f  (sigma up to %.3f)" % (label, "lowest-noise 1/16",
+                  len(low), np.mean([v[0] for v in low]), max(v[2] for v in low)), flush=True)
         return
 
     # ------------------------------------------------------------ train
@@ -590,6 +670,17 @@ def main():
                   open(os.path.join(d, "lora_meta.json"), "w"))
         if embed is not None:
             torch.save(embed.state_dict(), os.path.join(d, "part_embed.pt"))
+        if block_names:
+            from safetensors.torch import save_file
+            pd = dict(transformer.named_parameters())
+            delta = {n.replace(".base_layer", ""): (pd[n].detach().float().cpu() - block_orig[n].float()).to(torch.bfloat16).contiguous()
+                     for n in block_names}
+            save_file(delta, os.path.join(d, "blocks_delta.safetensors"))
+            if tag.startswith("lora_step"):           # several GB each: keep only the latest step's
+                import glob
+                for old_f in glob.glob(os.path.join(a.out, "lora_step*", "blocks_delta.safetensors")):
+                    if os.path.dirname(old_f) != d:
+                        os.remove(old_f)
         print("[save] %s" % d, flush=True)
 
     transformer.train()
@@ -637,10 +728,12 @@ def main():
             lr_now = a.lr if a.lr_final is None else \
                 a.lr_final + 0.5 * (a.lr - a.lr_final) * (1 + math.cos(math.pi * frac))
             if a.lr_warmup and step - s0 < a.lr_warmup:
-                w = (step - s0 + 1) / a.lr_warmup
+                # clamped: a resume from before --sched-start must not get w < 0,
+                # which gave a NEGATIVE learning rate (gradient ascent)
+                w = min(max((step - s0 + 1) / a.lr_warmup, 0.0), 1.0)
                 lr_now = a.lr_warm_from + (lr_now - a.lr_warm_from) * w
-            for g in opt.param_groups:
-                g["lr"] = lr_now
+            for g in opt.param_groups:          # every group follows the same shape
+                g["lr"] = g.get("base_lr", a.lr) * lr_now / a.lr
         opt.step()
         step += 1
         run_loss.append(acc)

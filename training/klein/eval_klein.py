@@ -67,7 +67,8 @@ def main():
     ap.add_argument("--refs", default="own", choices=["own", "swap", "swapvar", "none"],
                     help="swap: another object's photos; swapvar: the same "
                          "object in another appearance")
-    ap.add_argument("--n-refs", type=int, default=3)
+    ap.add_argument("--n-refs", type=int, default=None,
+                    help="reference photos per frame; default: what the LoRA was trained with (3)")
     ap.add_argument("--res", type=int, default=512)
     ap.add_argument("--steps", type=int, default=4)
     ap.add_argument("--cfg", type=float, default=1.0)
@@ -107,7 +108,8 @@ def main():
     # the token layout the LoRA was trained with is recorded next to it
     pack_ids, part_ids, substrate = "aligned", "none", False
     part_bias, bias_beta, bias_gamma, id_images = "none", 3.0, 3.0, False
-    substrate_stat, bias_bg = "mean", 0.0
+    substrate_stat, bias_bg, id_grey = "mean", 0.0, False
+    n_refs = 3
     if a.lora:
         arg_file = os.path.join(os.path.dirname(a.lora.rstrip("/")), "args.json")
         if os.path.exists(arg_file):
@@ -117,6 +119,8 @@ def main():
             part_bias = ta.get("part_bias", "none")
             bias_beta, bias_gamma = ta.get("bias_beta", 3.0), ta.get("bias_gamma", 3.0)
             id_images = bool(ta.get("id_images", False))
+            id_grey = bool(ta.get("id_grey", False))
+            n_refs = int(ta.get("n_refs", 3))
             substrate_stat = ta.get("substrate_stat", "mean")
             bias_bg = float(ta.get("bias_bg", 0.0))
     if a.substrate_stat:
@@ -125,14 +129,16 @@ def main():
         bias_bg = a.bias_bg
     R = Renderer(a.model, a.lora, pack_ids=pack_ids, part_ids=part_ids, substrate=substrate,
                  part_bias=part_bias, bias_beta=bias_beta, bias_gamma=bias_gamma,
-                 id_images=id_images, substrate_stat=substrate_stat, bias_bg=bias_bg)
-    print("[eval] LoRA %s, pack ids %s, part ids %s, substrate %s (%s), part bias %s (bg %.1f), id images %s"
-          % (a.lora, pack_ids, part_ids, substrate, substrate_stat, part_bias, bias_bg, id_images), flush=True)
+                 id_images=id_images, substrate_stat=substrate_stat, bias_bg=bias_bg,
+                 id_grey=id_grey)
+    print("[eval] LoRA %s, pack ids %s, part ids %s, substrate %s (%s), part bias %s (bg %.1f), id images %s%s"
+          % (a.lora, pack_ids, part_ids, substrate, substrate_stat, part_bias, bias_bg, id_images,
+             " (grey)" if id_grey else ""), flush=True)
 
     objs = json.load(open(a.objects)) if a.objects else None
     if isinstance(objs, dict):
         objs = objs["objects"]
-    ds = Frames(a.data, a.split, objs, a.n_refs, a.res, a.variants, a.max_frames)
+    ds = Frames(a.data, a.split, objs, a.n_refs or n_refs, a.res, a.variants, a.max_frames)
     ds.hist_offset, ds.hist_earlier = a.hist_offset, (1.0 if a.hist_earlier else 0.0)
     if a.states:
         lo, hi = (int(x) for x in a.states.split("-"))

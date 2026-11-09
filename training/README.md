@@ -3,7 +3,9 @@
 The code and settings behind the data-size curves: a renderer that turns a
 blockout of an assembly step into a photograph of the specific object, given
 three reference photos of it, trained on 5, 20, 40 and 100 objects and
-evaluated on 14 objects it never saw.
+evaluated on 14 objects it never saw. The model that followed the curves,
+which also gets a progress photo of the object, is described in
+[The progress-photo model](#the-progress-photo-model).
 
 ## Model
 
@@ -19,7 +21,9 @@ evaluated on 14 objects it never saw.
 - **Part correspondence:** every screen pixel and every photo pixel carries
   the id of the CAD part it belongs to. In every attention layer, a screen
   token gets +3 towards photo tokens of its own part and -3 towards other
-  parts (`attention_bias` in `klein/render.py`).
+  parts (`attention_bias` in `klein/render.py`). The curve runs also put
+  each token's part id on the 4th RoPE position axis (`--part-ids rope`, the
+  trainer default).
 - **Loss:** flow matching. The model predicts `noise - x0` from
   `(1 - s) x0 + s noise` and the conditioning tokens; the loss is the
   per-token squared error, plus 0.5 x the mean of the worst 10% of background
@@ -35,7 +39,7 @@ The same recipe for every point (`klein/job_gap.sbatch`):
 | learning rate | linear warm-up 1,000 steps, cosine 3e-4 to 3e-5 over the budget |
 | batch | 1 frame, gradients accumulated over 2 |
 | regularisers | off (no photo dropout, no label dropout) |
-| inputs | attention bias (soft, +3/-3) and substrate |
+| inputs | attention bias (soft, +3/-3), substrate, part id on the 4th RoPE axis |
 | validation | every 250 steps, fixed 32 frames with fixed noise and noise levels, training and held-out objects |
 | checkpoint | the one with the lowest held-out validation loss |
 | rendering | distilled checkpoint, 4 steps, 512 px |
@@ -59,6 +63,17 @@ LPIPS, lower is better. Held out = the 14 unseen objects, 1,035 frames.
 | 20 | 0.207 | 0.379 | 0.411 | 0.108 |
 | 40 | **0.198** | 0.387 | 0.415 | 0.109 |
 | 100 | 0.219 | 0.411 | 0.428 | 0.158 |
+
+Error over the whole frame, generated vs real, pixels in [0, 1], the way
+NeuralOS reports frame errors (`klein/job_fullframe.sbatch`,
+`klein/fullframe_err.py`). LPIPS above is scored on a crop around the object,
+so these numbers are much smaller: most of the frame is empty table.
+
+| training objects | held out, L1 | held out, RMSE | training objects, L1 | training objects, RMSE |
+|---|---|---|---|---|
+| 5 | 0.062 | 0.147 | 0.036 | 0.092 |
+| 40 | **0.043** | **0.118** | **0.018** | **0.070** |
+| 100 | 0.047 | 0.128 | 0.031 | 0.098 |
 
 - `results/loss_curves.png`: training and held-out validation loss over
   steps for the four runs.
@@ -162,7 +177,90 @@ objects cannot supply it. Not run yet: the held-out loss split by noise level
 
 The history option (`--history`, `--hist-offset`, `--hist-earlier`,
 `--hist-label-drop`, `--hist-augment` in `train_klein.py`, `--history` in
-`eval_klein.py`) is off by default and was not used for the curves.
+`eval_klein.py`) is off by default and was not used for the curves. The
+progress-photo model below is trained with it.
+
+## The progress-photo model
+
+The last check above says the inputs, not the model or the number of
+objects, limit held-out quality. The interface can supply what is missing:
+photos of the object taken during assembly. So the next model is trained with
+one (`klein/job_hist.sbatch`). Changes from the curve recipe:
+
+- **Inputs:** two reference photos (one of the parts laid out, one assembled;
+  a second laid-out photo added almost nothing when measured) plus a
+  *progress photo*. In training it is absent 20% of the time, from the same
+  assembly step 1 to 7 frames away in the same camera walk (11 to 80 degrees)
+  50%, and from an earlier assembly step 30% (`--history 0.8 --hist-offset 1-7
+  --hist-earlier 0.375`). It carries part labels like the other photos and is
+  not degraded (`--hist-label-drop 0 --hist-augment 0`).
+- **Part correspondence:** the attention bias only: no substrate
+  (`--no-substrate`) and no part id on the RoPE axis (`--part-ids none`; in
+  FLUX.2 the 4th position axis is the text-index axis).
+- **Schedule:** 40 objects (`meta/n40.json`), 180,000 steps, warm-up then
+  cosine from 1.5e-4 to 1.5e-5 (half the curves' rate; at N=20 it gave lower
+  loss and the same LPIPS). Rank 128, alpha 32. Gradient checkpointing off
+  (`--grad-ckpt off`): 1.0 s per step and 39 GB on an H200 NVL.
+- **Checkpoint:** the lowest mean of the held-out loss with and without the
+  progress photo, so the no-photo case cannot be traded away.
+- **Variant `hist40bo_r256`:** the same with rank 256 and alpha 64 (the same
+  alpha/rank), to test whether the adapter's size is a limit. 42 GB, same
+  speed.
+
+```
+X="--n-refs 2 --no-substrate --part-ids none --lr 1.5e-4 --lr-final 1.5e-5 --hist-label-drop 0 --hist-augment 0 --grad-ckpt off"
+H="-p ALL --constraint=H200 --open-mode=append"
+J=$(sbatch --parsable $H -J hist40bo -o hist40bo.log klein/job_hist.sbatch hist40bo n40.json 180000 auto "$X")
+for i in 2 3 4; do
+  J=$(sbatch --parsable $H --dependency=afterany:$J -J hist40bo -o hist40bo.log \
+      klein/job_hist.sbatch hist40bo n40.json 180000 auto "$X")
+done
+sbatch -p ALL --open-mode=append --dependency=afterany:$J -o curve_hist40bo.log klein/job_curve.sbatch hist40bo
+# rank 256: the same with hist40bo_r256 and "$X --rank 256 --lora-alpha 64"
+```
+
+On a preemptible partition (`-p ALL` above), a preempted piece is requeued
+and resumes from the latest `lora_step` checkpoint (saved every 10,000
+steps); the optimizer state is not saved and restarts. After training, the
+job evaluates the best checkpoint with no photo, with a photo 11, 35 and 80
+degrees away, without labels, from an earlier step, and on the first three
+assembly steps. `klein/job_curve.sbatch` then scores every saved checkpoint by
+whole-frame L1, RMSE and LPIPS (`klein/ckpt_curve.py`, into
+`runs/RUN/curve.csv`).
+
+**Status, 9 November 2026:** both runs are still training (rank 128 at about
+70,000 steps, rank 256 at about 117,000). Fixed-set validation loss, mean of
+the last 2,500 steps up to step 69,750:
+
+| run | held out, no photo | held out, with photo | training objects, with photo |
+|---|---|---|---|
+| progress-photo model, rank 128 | 0.2368 | **0.2306** | 0.1831 |
+| progress-photo model, rank 256 | 0.2410 | 0.2363 | 0.1826 |
+| gap40b, same step | 0.2407 | | |
+| gap100, same step | 0.2376 | | |
+
+These are diffusion losses, not image errors, and the photo's effect on them
+is small because most of this loss comes from low noise levels, where no
+photo can help. The image metrics come when training ends. So far rank 256 is
+no better than rank 128.
+
+**Open: noise levels.** Training draws the noise level from a logit-normal
+around 0.5; the validation sets use evenly spaced levels from 0.02 to 0.98;
+the 4-step sampler renders at about 1.0, 0.96, 0.88 and 0.72 (computed from
+the scheduler settings, not yet checked on the cluster). Only about 18% of
+training samples fall at 0.72 or above, where layout and colour are decided
+and where the progress photo matters most.
+
+### Fixes since the curves
+
+- Chained pieces resumed from the alphabetically last checkpoint
+  (`lora_step90000` after `lora_step150000`); `auto` now sorts by number.
+- Resuming before the end of the warm-up gave a negative learning rate; the
+  warm-up factor is now clamped to [0, 1].
+- New trainer options, all off by default so the curve recipe is unchanged:
+  `--no-substrate`, `--grad-ckpt`, `--lora-targets`, `--train-blocks` (with
+  `--block-lr`), `--eval-levels`, `--id-grey`. `job_gap.sbatch` takes extra
+  trainer flags as a 5th argument.
 
 ## Files
 
@@ -171,9 +269,16 @@ klein/render.py          model wrapper, token layout, attention bias, substrate,
 klein/train_klein.py     LoRA training with fixed-set validation
 klein/eval_klein.py      renders held-out or training frames with a trained LoRA
 klein/job_gap.sbatch     Slurm job: train one point of the curve, then evaluate it
+klein/job_hist.sbatch    Slurm job: train the progress-photo model, then evaluate it
+klein/job_curve.sbatch, ckpt_curve.py   whole-frame L1 / RMSE / LPIPS of every saved checkpoint
+klein/job_fullframe.sbatch, job_fullframe_hist.sbatch, fullframe_err.py
+                         whole-frame error of the best checkpoint, without / with the photo
+klein/promo_eval.py, promo_video.py, job_promo.sbatch
+                         a session as the interface would run it, with a memory of photos
 klein/job_klein_setup.sbatch  installs the packages and downloads the checkpoints
 klein/job_basecheck.sbatch, job_ckptsweep.sbatch, job_evalonly.sbatch,
-klein/job_histinfer.sbatch    the diagnostic jobs in the table above
+klein/job_histinfer.sbatch, job_histdist.sbatch, job_overfit5.sbatch
+                         the diagnostic jobs (job_overfit5 uses the small v5_unit corpus)
 klein/part_colour.py     share of parts rendered in their own colour
 klein/offobject.py       content invented away from the object
 klein/error_regions.py   LPIPS split into blockout-mismatch, part interior and rest

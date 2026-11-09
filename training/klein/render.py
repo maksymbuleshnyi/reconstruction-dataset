@@ -168,7 +168,7 @@ def substrate_image(pack: Image.Image, refs, ref_id_maps, n_parts, gain=1.07,
     return Image.fromarray(out.astype(np.uint8))
 
 
-def id_colour_images(pack: Image.Image, ref_id_maps, n_parts, rng=None):
+def id_colour_images(pack: Image.Image, ref_id_maps, n_parts, rng=None, grey=False):
     """The same random colour for the same part, on the blockout and on every
     reference photo that has an id map: one image aligned with the blockout
     (from the pack's B channel) and one per reference (from its id map, or
@@ -176,11 +176,15 @@ def id_colour_images(pack: Image.Image, ref_id_maps, n_parts, rng=None):
     only "equal on both sides" carries information. This is the id-image
     variant: the link is handed to the model as pictures and attention has to
     learn to match them, unlike the bias which applies the match itself.
+    grey: instead, part k is the flat grey level k / (n + 1) of the capture's
+    own id maps (the pack's B channel), fixed per part, on both sides.
     """
     rng = rng or np.random.default_rng()
     n = int(n_parts or 0)
     pal = np.zeros((n + 1, 3), np.uint8)
-    if n:
+    if n and grey:
+        pal[1:] = np.rint(np.arange(1, n + 1) * 255.0 / (n + 1))[:, None]
+    elif n:
         hue = rng.permutation(n) / n + rng.random() / n            # spread hues
         for k, hh in enumerate(hue):
             i = int(hh * 6) % 6
@@ -368,19 +372,32 @@ class Renderer:
     def __init__(self, model=DISTILLED, lora=None, pack_ids="aligned", part_ids="none",
                  substrate=False, part_bias="none", bias_beta=3.0, bias_gamma=3.0,
                  device="cuda", dtype=torch.bfloat16, compile=False, id_images=False,
-                 substrate_stat="mean", bias_bg=0.0):
+                 substrate_stat="mean", bias_bg=0.0, id_grey=False):
         """part_ids: none | rope (4th position axis) | embed (learned vector).
         part_bias: none | soft | hard, the attention bias from the part maps.
-        id_images: the same-colour id image on the blockout and each photo.
+        id_images: the same-colour id image on the blockout and each photo
+        (id_grey: the capture's grey part levels instead of random colours).
         substrate_stat: mean | robust, how a part's colour is read from the photos."""
         from diffusers import Flux2KleinPipeline, FlowMatchEulerDiscreteScheduler
         pipe = Flux2KleinPipeline.from_pretrained(model, torch_dtype=dtype)
         if lora:
             pipe.load_lora_weights(lora)
+            delta_f = os.path.join(lora, "blocks_delta.safetensors")
+            if os.path.exists(delta_f):          # fully trained blocks: add their changes
+                from safetensors.torch import load_file
+                delta = load_file(delta_f)
+                hit = 0
+                with torch.no_grad():
+                    for n, prm in pipe.transformer.named_parameters():
+                        k = n.replace(".base_layer", "")
+                        if k in delta:
+                            prm.add_(delta[k].to(prm.device, prm.dtype)); hit += 1
+                print("[render] added trained block weights for %d of %d tensors" % (hit, len(delta)), flush=True)
         pipe.to(device)
         pipe.set_progress_bar_config(disable=True)
         self.pipe, self.dev, self.wdt, self.pack_ids = pipe, device, dtype, pack_ids
         self.part_ids, self.substrate, self.id_images = part_ids, substrate, id_images
+        self.id_grey = id_grey
         self.substrate_stat = substrate_stat
         self.bias_bg = bias_bg
         self.part_bias, self.bias_beta, self.bias_gamma = part_bias, bias_beta, bias_gamma
@@ -442,7 +459,7 @@ class Renderer:
                                                        stat=self.substrate_stat))]
         if self.id_images:
             pim, rims = id_colour_images(pack, ref_id_maps if ref_lats else [], n_parts,
-                                         np.random.default_rng(int(seed)))
+                                         np.random.default_rng(int(seed)), self.id_grey)
             extra.append(self.codec.encode(pim))
             tail = [self.codec.encode(x) if x is not None else None for x in rims]
         ctx, ctx_ids = self.codec.context(pack_lat, ref_lats, tgt_ids, self.pack_ids,
