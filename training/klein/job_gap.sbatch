@@ -18,7 +18,8 @@
 #   N:      5      20      40      100
 #   steps:  60000  120000  120000  120000   (planned cosine over the whole budget)
 #   sbatch -J gap5b -o gap5b.log klein/job_gap.sbatch gap5b n5.json 60000
-# usage: sbatch -J <name> -o <name>.log klein/job_gap.sbatch RUN OBJECTS STEPS [RESUME_STEP|auto]
+# usage: sbatch -J <name> -o <name>.log klein/job_gap.sbatch RUN OBJECTS STEPS [RESUME_STEP|auto] ["EXTRA TRAINER FLAGS"]
+#   EXTRA overrides the defaults, e.g. "--rank 512 --lora-alpha 128 --lora-targets all-linear"
 #   Runs longer than the wall-time: submit a chain, each piece resuming from
 #   the latest checkpoint ("auto"); pieces after completion are no-ops:
 #     J=$(sbatch --parsable -J gap100 -o gap100.log klein/job_gap.sbatch gap100 all 120000)
@@ -28,7 +29,7 @@ cd ~/h200_pilot
 export HF_HOME=$HOME/.cache/huggingface
 export PYTHONPATH=$HOME/kleinlib:$HOME/.local/lib/python3.11/site-packages:$HOME/dsenv
 PY=$HOME/py311/bin/python
-N=${1:?run name}; OBJ=${2:?objects json or all}; STEPS=${3:-60000}; RS=${4:-0}
+N=${1:?run name}; OBJ=${2:?objects json or all}; STEPS=${3:-60000}; RS=${4:-0}; EXTRA=${5:-}
 DATA=$HOME/h200_pilot/v5_colour
 set +e
 OBJARG=""; OBJTAG=""
@@ -39,7 +40,7 @@ if [ "$OBJ" != "all" ]; then
 fi
 RESUME=""
 if [ "$RS" = "auto" ]; then          # continue from the latest saved step (chained pieces)
-  CK=$(ls -d runs/$N/lora_step* 2>/dev/null | sort | tail -1)
+  CK=$(ls -d runs/$N/lora_step* 2>/dev/null | sort -V | tail -1)
   if [ -n "$CK" ]; then RS=$(echo $CK | sed "s/.*lora_step0*//"); else RS=0; fi
 fi
 if [ "$RS" -gt 0 ]; then
@@ -47,13 +48,13 @@ if [ "$RS" -gt 0 ]; then
   [ -d "$CK" ] || { echo "no checkpoint $CK"; exit 1; }
   RESUME="--resume $CK --start-step $RS"; echo "resuming from $CK"
 fi
-echo "run=$N objects=$OBJ steps=$STEPS"
+echo "run=$N objects=$OBJ steps=$STEPS extra=$EXTRA"
 
 if [ ! -f runs/$N/DONE_TRAIN ]; then
   $PY klein/train_klein.py --data $DATA --out runs/$N $OBJARG $RESUME \
       --steps $STEPS --accum 2 --val-every 250 --val-frames 32 --save-every 10000 --save-best --select v --patience 100 \
       --rank 128 --lora-alpha 32 --ref-warmup 0 --lr 3e-4 --lr-warmup 1000 --lr-final 3e-5 \
-      --ref-drop 0 --bias-drop 0 --ref-id-drop 0 --part-bias soft --substrate \
+      --ref-drop 0 --bias-drop 0 --ref-id-drop 0 --part-bias soft --substrate $EXTRA \
     && touch runs/$N/DONE_TRAIN
 fi
 [ -f runs/$N/DONE_TRAIN ] || { echo "training did not finish"; exit 1; }
