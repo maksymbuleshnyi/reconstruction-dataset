@@ -1,0 +1,10 @@
+{
+ "frames": 5,
+ "objects": [
+  "21590_7d092186"
+ ],
+ "refs": "own",
+ "steps": 4,
+ "lora": "runs/overfit5/lora",
+ "seconds": 5.105244874954224
+}

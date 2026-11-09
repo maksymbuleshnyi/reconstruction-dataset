@@ -1,0 +1,191 @@
+~/kleinlib/diffusers/utils/deprecation_utils.py:23: FutureWarning: `torch_dtype` is deprecated and will be removed in version 1.0.0. Please use `dtype` instead.
+  deprecate("torch_dtype", "1.0.0", _TORCH_DTYPE_DEPRECATION_MESSAGE)
+Loading pipeline components...:   0%|          | 0/5 [00:00<?, ?it/s]Loading pipeline components...:  20%|██        | 1/5 [00:00<00:00,  8.10it/s]
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s][A
+Loading weights:  34%|███▍      | 136/398 [00:00<00:00, 1340.12it/s][A
+Loading weights:  76%|███████▌  | 302/398 [00:00<00:00, 1501.59it/s][ALoading weights: 100%|██████████| 398/398 [00:00<00:00, 1607.76it/s]
+Loading pipeline components...:  40%|████      | 2/5 [00:00<00:00,  3.89it/s]Loading pipeline components...:  60%|██████    | 3/5 [00:00<00:00,  5.02it/s]Loading pipeline components...:  80%|████████  | 4/5 [00:00<00:00,  3.62it/s]Loading pipeline components...: 100%|██████████| 5/5 [00:01<00:00,  5.00it/s]
+~/kleinlib/huggingface_hub/utils/_validators.py:208: UserWarning: The `local_dir_use_symlinks` argument is deprecated and ignored in `hf_hub_download`. Downloading to a local directory does not use symlinks anymore.
+  warnings.warn(
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[model] LoRA rank 128: 133.7M trainable of 4.01B
+[data] train: 5 frames over 1 objects, 60 reference sets
+[data] train: 5 frames over 1 objects, 60 reference sets
+[val] training frames: 5 frames over 1 objects
+[data] train: 360 frames over 3 objects, 60 reference sets
+[val] held-out frames: 32 frames over 3 objects
+~/h200_pilot/klein/train_klein.py:433: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:820.)
+  acc += float(loss)
+step 25/3000 loss 0.4354 (avg25 0.8773) 1.7 s/step mem 17G lr 7.5e-05
+step 50/3000 loss 0.1815 (avg25 0.3353) 1.7 s/step mem 17G lr 1.5e-04
+step 75/3000 loss 0.3842 (avg25 0.2997) 1.7 s/step mem 17G lr 2.2e-04
+step 100/3000 loss 0.1360 (avg25 0.2739) 1.7 s/step mem 17G lr 3.0e-04
+val step 100 fixed_train 0.5377 fixed_heldout 0.3889
+step 125/3000 loss 0.1123 (avg25 0.2350) 1.7 s/step mem 17G lr 3.0e-04
+step 150/3000 loss 0.1151 (avg25 0.2349) 1.7 s/step mem 17G lr 3.0e-04
+step 175/3000 loss 0.1789 (avg25 0.2754) 1.7 s/step mem 17G lr 3.0e-04
+step 200/3000 loss 0.2755 (avg25 0.2127) 1.7 s/step mem 17G lr 3.0e-04
+val step 200 fixed_train 0.4995 fixed_heldout 0.3909
+step 225/3000 loss 0.1435 (avg25 0.1967) 1.7 s/step mem 17G lr 3.0e-04
+step 250/3000 loss 0.1672 (avg25 0.1779) 1.7 s/step mem 17G lr 3.0e-04
+step 275/3000 loss 0.1379 (avg25 0.1574) 1.7 s/step mem 17G lr 2.9e-04
+step 300/3000 loss 0.0629 (avg25 0.1916) 1.7 s/step mem 17G lr 2.9e-04
+val step 300 fixed_train 0.4472 fixed_heldout 0.4287
+step 325/3000 loss 0.2637 (avg25 0.1639) 1.7 s/step mem 17G lr 2.9e-04
+step 350/3000 loss 0.4684 (avg25 0.1434) 1.7 s/step mem 17G lr 2.9e-04
+step 375/3000 loss 0.0719 (avg25 0.1102) 1.7 s/step mem 17G lr 2.9e-04
+step 400/3000 loss 0.1063 (avg25 0.1028) 1.7 s/step mem 17G lr 2.9e-04
+val step 400 fixed_train 0.4615 fixed_heldout 0.5079
+step 425/3000 loss 0.1811 (avg25 0.1433) 1.7 s/step mem 17G lr 2.9e-04
+step 450/3000 loss 0.0654 (avg25 0.1584) 1.7 s/step mem 17G lr 2.9e-04
+step 475/3000 loss 0.2594 (avg25 0.0965) 1.7 s/step mem 17G lr 2.8e-04
+step 500/3000 loss 0.0850 (avg25 0.1263) 1.7 s/step mem 17G lr 2.8e-04
+val step 500 fixed_train 0.4864 fixed_heldout 0.5077
+step 525/3000 loss 0.0478 (avg25 0.0902) 1.7 s/step mem 17G lr 2.8e-04
+step 550/3000 loss 0.1013 (avg25 0.0848) 1.7 s/step mem 17G lr 2.8e-04
+step 575/3000 loss 0.3048 (avg25 0.0902) 1.7 s/step mem 17G lr 2.8e-04
+step 600/3000 loss 0.0888 (avg25 0.0886) 1.7 s/step mem 17G lr 2.7e-04
+val step 600 fixed_train 0.3585 fixed_heldout 0.5310
+step 625/3000 loss 0.2342 (avg25 0.0735) 1.7 s/step mem 17G lr 2.7e-04
+step 650/3000 loss 0.0507 (avg25 0.0527) 1.7 s/step mem 17G lr 2.7e-04
+step 675/3000 loss 0.0218 (avg25 0.0438) 1.7 s/step mem 17G lr 2.7e-04
+step 700/3000 loss 0.0241 (avg25 0.0335) 1.7 s/step mem 17G lr 2.7e-04
+val step 700 fixed_train 0.3429 fixed_heldout 0.6023
+step 725/3000 loss 0.0377 (avg25 0.0443) 1.7 s/step mem 17G lr 2.6e-04
+step 750/3000 loss 0.0220 (avg25 0.0511) 1.7 s/step mem 17G lr 2.6e-04
+step 775/3000 loss 0.0368 (avg25 0.0458) 1.7 s/step mem 17G lr 2.6e-04
+step 800/3000 loss 0.0279 (avg25 0.0321) 1.7 s/step mem 17G lr 2.6e-04
+val step 800 fixed_train 0.3331 fixed_heldout 0.6476
+step 825/3000 loss 0.0124 (avg25 0.0553) 1.7 s/step mem 17G lr 2.5e-04
+step 850/3000 loss 0.0556 (avg25 0.0697) 1.7 s/step mem 17G lr 2.5e-04
+step 875/3000 loss 0.0390 (avg25 0.0596) 1.7 s/step mem 17G lr 2.5e-04
+step 900/3000 loss 0.0416 (avg25 0.0353) 1.7 s/step mem 17G lr 2.4e-04
+val step 900 fixed_train 0.3198 fixed_heldout 0.6543
+step 925/3000 loss 0.0336 (avg25 0.1379) 1.7 s/step mem 17G lr 2.4e-04
+step 950/3000 loss 0.0880 (avg25 0.0776) 1.7 s/step mem 17G lr 2.4e-04
+step 975/3000 loss 0.0291 (avg25 0.0495) 1.7 s/step mem 17G lr 2.4e-04
+step 1000/3000 loss 0.0228 (avg25 0.0584) 1.7 s/step mem 17G lr 2.3e-04
+val step 1000 fixed_train 0.3324 fixed_heldout 0.6318
+step 1025/3000 loss 0.0158 (avg25 0.0302) 1.7 s/step mem 17G lr 2.3e-04
+step 1050/3000 loss 0.0314 (avg25 0.0527) 1.7 s/step mem 17G lr 2.3e-04
+step 1075/3000 loss 0.0159 (avg25 0.0451) 1.7 s/step mem 17G lr 2.2e-04
+step 1100/3000 loss 0.0279 (avg25 0.0348) 1.7 s/step mem 17G lr 2.2e-04
+val step 1100 fixed_train 0.3215 fixed_heldout 0.7111
+step 1125/3000 loss 0.0188 (avg25 0.0245) 1.7 s/step mem 17G lr 2.2e-04
+step 1150/3000 loss 0.0155 (avg25 0.0336) 1.7 s/step mem 17G lr 2.1e-04
+step 1175/3000 loss 0.0269 (avg25 0.0242) 1.7 s/step mem 17G lr 2.1e-04
+step 1200/3000 loss 0.1259 (avg25 0.0306) 1.7 s/step mem 17G lr 2.1e-04
+val step 1200 fixed_train 0.3322 fixed_heldout 0.7300
+step 1225/3000 loss 0.0084 (avg25 0.0291) 1.7 s/step mem 17G lr 2.0e-04
+step 1250/3000 loss 0.0705 (avg25 0.0360) 1.7 s/step mem 17G lr 2.0e-04
+step 1275/3000 loss 0.0457 (avg25 0.0253) 1.7 s/step mem 17G lr 2.0e-04
+step 1300/3000 loss 0.0256 (avg25 0.0276) 1.7 s/step mem 17G lr 1.9e-04
+val step 1300 fixed_train 0.3659 fixed_heldout 0.7257
+step 1325/3000 loss 0.1810 (avg25 0.0486) 1.7 s/step mem 17G lr 1.9e-04
+step 1350/3000 loss 0.0538 (avg25 0.0507) 1.7 s/step mem 17G lr 1.9e-04
+step 1375/3000 loss 0.0091 (avg25 0.0282) 1.7 s/step mem 17G lr 1.8e-04
+step 1400/3000 loss 0.0219 (avg25 0.0370) 1.7 s/step mem 17G lr 1.8e-04
+val step 1400 fixed_train 0.3205 fixed_heldout 0.7583
+step 1425/3000 loss 0.0129 (avg25 0.0211) 1.7 s/step mem 17G lr 1.8e-04
+step 1450/3000 loss 0.0106 (avg25 0.0162) 1.7 s/step mem 17G lr 1.7e-04
+step 1475/3000 loss 0.0087 (avg25 0.0164) 1.7 s/step mem 17G lr 1.7e-04
+step 1500/3000 loss 0.0787 (avg25 0.0196) 1.7 s/step mem 17G lr 1.7e-04
+val step 1500 fixed_train 0.3198 fixed_heldout 0.8542
+step 1525/3000 loss 0.0126 (avg25 0.0445) 1.7 s/step mem 17G lr 1.6e-04
+step 1550/3000 loss 0.0115 (avg25 0.0220) 1.7 s/step mem 17G lr 1.6e-04
+step 1575/3000 loss 0.0139 (avg25 0.0342) 1.7 s/step mem 17G lr 1.5e-04
+step 1600/3000 loss 0.0202 (avg25 0.0214) 1.7 s/step mem 17G lr 1.5e-04
+val step 1600 fixed_train 0.2884 fixed_heldout 0.7803
+step 1625/3000 loss 0.0098 (avg25 0.0186) 1.7 s/step mem 17G lr 1.5e-04
+step 1650/3000 loss 0.0131 (avg25 0.0115) 1.7 s/step mem 17G lr 1.4e-04
+step 1675/3000 loss 0.0072 (avg25 0.0123) 1.7 s/step mem 17G lr 1.4e-04
+step 1700/3000 loss 0.0563 (avg25 0.0344) 1.7 s/step mem 17G lr 1.4e-04
+val step 1700 fixed_train 0.2840 fixed_heldout 0.8175
+step 1725/3000 loss 0.0170 (avg25 0.0194) 1.8 s/step mem 17G lr 1.3e-04
+step 1750/3000 loss 0.0084 (avg25 0.0255) 1.7 s/step mem 17G lr 1.3e-04
+step 1775/3000 loss 0.0100 (avg25 0.0153) 1.7 s/step mem 17G lr 1.3e-04
+step 1800/3000 loss 0.0335 (avg25 0.0195) 1.7 s/step mem 17G lr 1.2e-04
+val step 1800 fixed_train 0.2786 fixed_heldout 0.8935
+step 1825/3000 loss 0.0142 (avg25 0.0139) 1.8 s/step mem 17G lr 1.2e-04
+step 1850/3000 loss 0.0110 (avg25 0.0277) 1.7 s/step mem 17G lr 1.2e-04
+step 1875/3000 loss 0.0304 (avg25 0.0155) 1.7 s/step mem 17G lr 1.1e-04
+step 1900/3000 loss 0.0058 (avg25 0.0117) 1.7 s/step mem 17G lr 1.1e-04
+val step 1900 fixed_train 0.2555 fixed_heldout 0.8863
+step 1925/3000 loss 0.0049 (avg25 0.0143) 1.8 s/step mem 17G lr 1.1e-04
+step 1950/3000 loss 0.0560 (avg25 0.0118) 1.7 s/step mem 17G lr 1.0e-04
+step 1975/3000 loss 0.0041 (avg25 0.0091) 1.7 s/step mem 17G lr 1.0e-04
+step 2000/3000 loss 0.0539 (avg25 0.0123) 1.7 s/step mem 17G lr 9.8e-05
+val step 2000 fixed_train 0.2512 fixed_heldout 0.9163
+step 2025/3000 loss 0.0042 (avg25 0.0112) 1.8 s/step mem 17G lr 9.5e-05
+step 2050/3000 loss 0.0259 (avg25 0.0096) 1.7 s/step mem 17G lr 9.2e-05
+step 2075/3000 loss 0.0112 (avg25 0.0082) 1.7 s/step mem 17G lr 8.9e-05
+step 2100/3000 loss 0.0114 (avg25 0.0081) 1.7 s/step mem 17G lr 8.6e-05
+val step 2100 fixed_train 0.2519 fixed_heldout 0.9655
+step 2125/3000 loss 0.0096 (avg25 0.0109) 1.8 s/step mem 17G lr 8.3e-05
+step 2150/3000 loss 0.0099 (avg25 0.0117) 1.7 s/step mem 17G lr 8.0e-05
+step 2175/3000 loss 0.0051 (avg25 0.0147) 1.7 s/step mem 17G lr 7.7e-05
+step 2200/3000 loss 0.0067 (avg25 0.0215) 1.7 s/step mem 17G lr 7.5e-05
+val step 2200 fixed_train 0.2635 fixed_heldout 0.9334
+step 2225/3000 loss 0.0175 (avg25 0.0311) 1.8 s/step mem 17G lr 7.2e-05
+step 2250/3000 loss 0.0097 (avg25 0.0222) 1.7 s/step mem 17G lr 7.0e-05
+step 2275/3000 loss 0.0052 (avg25 0.0165) 1.7 s/step mem 17G lr 6.7e-05
+step 2300/3000 loss 0.0098 (avg25 0.0102) 1.7 s/step mem 17G lr 6.5e-05
+val step 2300 fixed_train 0.2491 fixed_heldout 0.8853
+step 2325/3000 loss 0.0164 (avg25 0.0079) 1.8 s/step mem 17G lr 6.2e-05
+step 2350/3000 loss 0.0085 (avg25 0.0083) 1.7 s/step mem 17G lr 6.0e-05
+step 2375/3000 loss 0.0077 (avg25 0.0112) 1.7 s/step mem 17G lr 5.8e-05
+step 2400/3000 loss 0.0052 (avg25 0.0070) 1.7 s/step mem 17G lr 5.6e-05
+val step 2400 fixed_train 0.2342 fixed_heldout 0.9376
+step 2425/3000 loss 0.0042 (avg25 0.0083) 1.8 s/step mem 17G lr 5.4e-05
+step 2450/3000 loss 0.0478 (avg25 0.0125) 1.7 s/step mem 17G lr 5.2e-05
+step 2475/3000 loss 0.0035 (avg25 0.0111) 1.7 s/step mem 17G lr 5.0e-05
+step 2500/3000 loss 0.0033 (avg25 0.0121) 1.7 s/step mem 17G lr 4.8e-05
+val step 2500 fixed_train 0.2277 fixed_heldout 0.9703
+step 2525/3000 loss 0.0090 (avg25 0.0094) 1.8 s/step mem 17G lr 4.6e-05
+step 2550/3000 loss 0.0037 (avg25 0.0118) 1.7 s/step mem 17G lr 4.5e-05
+step 2575/3000 loss 0.0093 (avg25 0.0081) 1.7 s/step mem 17G lr 4.3e-05
+step 2600/3000 loss 0.0525 (avg25 0.0120) 1.7 s/step mem 17G lr 4.2e-05
+val step 2600 fixed_train 0.2244 fixed_heldout 1.0039
+step 2625/3000 loss 0.0074 (avg25 0.0122) 1.8 s/step mem 17G lr 4.0e-05
+step 2650/3000 loss 0.0094 (avg25 0.0096) 1.7 s/step mem 17G lr 3.9e-05
+step 2675/3000 loss 0.0174 (avg25 0.0177) 1.7 s/step mem 17G lr 3.8e-05
+step 2700/3000 loss 0.0044 (avg25 0.0136) 1.7 s/step mem 17G lr 3.7e-05
+val step 2700 fixed_train 0.2288 fixed_heldout 1.0013
+step 2725/3000 loss 0.0041 (avg25 0.0086) 1.8 s/step mem 17G lr 3.6e-05
+step 2750/3000 loss 0.0127 (avg25 0.0063) 1.7 s/step mem 17G lr 3.5e-05
+step 2775/3000 loss 0.0060 (avg25 0.0164) 1.7 s/step mem 17G lr 3.4e-05
+step 2800/3000 loss 0.0031 (avg25 0.0076) 1.7 s/step mem 17G lr 3.3e-05
+val step 2800 fixed_train 0.2274 fixed_heldout 0.9879
+step 2825/3000 loss 0.0056 (avg25 0.0106) 1.8 s/step mem 17G lr 3.2e-05
+step 2850/3000 loss 0.0032 (avg25 0.0099) 1.8 s/step mem 17G lr 3.2e-05
+step 2875/3000 loss 0.0050 (avg25 0.0060) 1.7 s/step mem 17G lr 3.1e-05
+step 2900/3000 loss 0.0133 (avg25 0.0080) 1.7 s/step mem 17G lr 3.1e-05
+val step 2900 fixed_train 0.2275 fixed_heldout 1.0339
+step 2925/3000 loss 0.0028 (avg25 0.0059) 1.8 s/step mem 17G lr 3.0e-05
+step 2950/3000 loss 0.0111 (avg25 0.0291) 1.8 s/step mem 17G lr 3.0e-05
+step 2975/3000 loss 0.0069 (avg25 0.0228) 1.7 s/step mem 17G lr 3.0e-05
+step 3000/3000 loss 0.0100 (avg25 0.0137) 1.7 s/step mem 17G lr 3.0e-05
+val step 3000 fixed_train 0.2202 fixed_heldout 1.0032
+[save] runs/overfit5/lora
+TRAIN COMPLETE
+== loss on the five frames, every 500 steps
+500 0.4864 0.5077
+1000 0.3324 0.6318
+1500 0.3198 0.8542
+2000 0.2512 0.9163
+2500 0.2277 0.9703
+3000 0.2202 1.0032
+~/kleinlib/diffusers/utils/deprecation_utils.py:23: FutureWarning: `torch_dtype` is deprecated and will be removed in version 1.0.0. Please use `dtype` instead.
+  deprecate("torch_dtype", "1.0.0", _TORCH_DTYPE_DEPRECATION_MESSAGE)
+Loading pipeline components...:   0%|          | 0/5 [00:00<?, ?it/s]Loading pipeline components...:  20%|██        | 1/5 [00:00<00:01,  2.82it/s]Loading pipeline components...:  40%|████      | 2/5 [00:00<00:00,  4.46it/s]
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s][ALoading weights: 100%|██████████| 398/398 [00:00<00:00, 16857.18it/s]
+Loading pipeline components...: 100%|██████████| 5/5 [00:00<00:00, 11.04it/s]Loading pipeline components...: 100%|██████████| 5/5 [00:00<00:00,  8.33it/s]
+[eval] LoRA runs/overfit5/lora, pack ids aligned, part ids rope, substrate True (mean), part bias soft, id images False
+[data] train: 5 frames over 1 objects, 60 reference sets
+[eval] 5 frames over 1 objects, refs=own -> runs/overfit5/gens_fit
+  0/5 (1s)
+EVAL COMPLETE fit
+overfit5     the five memorised frames model             -   0.0510   0.0265   0.0241    0.833      0.48
+-> sheet_overfit5.jpg 5 frames
+OVERFIT5 COMPLETE overfit5
